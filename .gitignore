@@ -75,3 +75,5 @@ config/cache
 
 # Docker compose
 compose.override.yaml
+
+compose.prod.yaml

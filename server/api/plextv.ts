@@ -133,6 +133,25 @@ export interface PlexWatchlistCache {
   response: WatchlistResponse;
 }
 
+export interface PlexHomeUser {
+  id: number;
+  uuid: string;
+  title: string;
+  username: string;
+  email: string;
+  thumb: string;
+  home: boolean;
+  restricted: boolean;
+}
+
+interface HomeUsersResponse {
+  users: PlexHomeUser[];
+}
+
+interface SwitchUserResponse {
+  authenticationToken: string;
+}
+
 class PlexTvAPI extends ExternalAPI {
   private authToken: string;
 
@@ -377,6 +396,39 @@ class PlexTvAPI extends ExternalAPI {
         totalSize: 0,
         items: [],
       };
+    }
+  }
+
+  public async getHomeUsers(): Promise<PlexHomeUser[]> {
+    try {
+      const response = await this.axios.get<HomeUsersResponse>(
+        '/api/home/users'
+      );
+      return response.data.users ?? [];
+    } catch (e) {
+      logger.error('Failed to retrieve home users from Plex', {
+        label: 'Plex.tv API',
+        errorMessage: e.message,
+      });
+      return [];
+    }
+  }
+
+  public async switchToManagedUser(
+    managedUserId: number
+  ): Promise<string | null> {
+    try {
+      const response = await this.axios.post<SwitchUserResponse>(
+        `/api/home/users/${managedUserId}/switch`
+      );
+      return response.data.authenticationToken ?? null;
+    } catch (e) {
+      logger.error('Failed to switch to managed Plex user', {
+        label: 'Plex.tv API',
+        managedUserId,
+        errorMessage: e.message,
+      });
+      return null;
     }
   }
 

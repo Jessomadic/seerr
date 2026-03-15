@@ -643,6 +643,52 @@ router.post(
         }
       }
 
+      // Import managed (restricted) home users from the Plex home account.
+      // These users have no email and cannot log in via OAuth, so they are
+      // identified by plexId and given a synthetic email to satisfy the unique constraint.
+      const homeUsers = await mainPlexTv.getHomeUsers();
+      for (const homeUser of homeUsers) {
+        // Only process restricted (managed) accounts, not the admin themselves
+        if (!homeUser.restricted) {
+          continue;
+        }
+
+        // If body.plexIds is provided, only import the selected IDs
+        if (body?.plexIds && !body.plexIds.includes(String(homeUser.id))) {
+          continue;
+        }
+
+        const existing = await userRepository
+          .createQueryBuilder('user')
+          .where('user.plexId = :plexId', { plexId: homeUser.id })
+          .getOne();
+
+        if (existing) {
+          // Update avatar in case it changed
+          existing.avatar = homeUser.thumb;
+          existing.plexUsername = homeUser.title || homeUser.username;
+          await userRepository.save(existing);
+          continue;
+        }
+
+        // Use a synthetic email so the unique constraint is satisfied.
+        // Managed users never receive email, so this address is never used.
+        const syntheticEmail = `managed-${homeUser.id}@plex.managed.localhost`;
+
+        const newUser = new User({
+          plexUsername: homeUser.title || homeUser.username,
+          email: syntheticEmail,
+          permissions: settings.main.defaultPermissions,
+          plexId: homeUser.id,
+          plexToken: '',
+          avatar: homeUser.thumb,
+          userType: UserType.PLEX,
+          isManagedUser: true,
+        });
+        await userRepository.save(newUser);
+        createdUsers.push(newUser);
+      }
+
       return res.status(201).json(User.filterMany(createdUsers));
     } catch (e) {
       next({ status: 500, message: e.message });

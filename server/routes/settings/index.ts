@@ -492,6 +492,7 @@ settingsRoutes.get(
         username: string;
         email: string;
         thumb: string;
+        isManaged?: boolean;
       }[] = [];
 
       const plexIds = plexUsers.map((plexUser) => plexUser.id);
@@ -520,6 +521,31 @@ settingsRoutes.get(
           }
         })
       );
+
+      // Also include unimported managed (restricted) home users
+      const homeUsers = await plexApi.getHomeUsers();
+      const managedUsers = homeUsers.filter((u) => u.restricted);
+
+      if (managedUsers.length > 0) {
+        const managedPlexIds = managedUsers.map((u) => String(u.id));
+        const existingManagedUsers = await userRepository
+          .createQueryBuilder('user')
+          .where('user.plexId IN (:...ids)', { ids: managedPlexIds })
+          .getMany();
+
+        for (const managedUser of managedUsers) {
+          if (!existingManagedUsers.find((u) => u.plexId === managedUser.id)) {
+            unimportedPlexUsers.push({
+              id: String(managedUser.id),
+              title: managedUser.title,
+              username: managedUser.username || managedUser.title,
+              email: '',
+              thumb: managedUser.thumb,
+              isManaged: true,
+            });
+          }
+        }
+      }
 
       return res.status(200).json(sortBy(unimportedPlexUsers, 'username'));
     } catch (e) {

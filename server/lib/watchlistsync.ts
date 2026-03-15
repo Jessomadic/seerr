@@ -1,4 +1,4 @@
-import PlexTvAPI from '@server/api/plextv';
+import PlexTvAPI, { type PlexWatchlistItem } from '@server/api/plextv';
 import { MediaStatus, MediaType } from '@server/constants/media';
 import { getRepository } from '@server/datasource';
 import Media from '@server/entity/Media';
@@ -18,7 +18,7 @@ class WatchlistSync {
   public async syncWatchlist() {
     const userRepository = getRepository(User);
 
-    // Get users who actually have plex tokens
+    // Phase 1: Regular users who have their own Plex token
     const users = await userRepository
       .createQueryBuilder('user')
       .addSelect('user.plexToken')
@@ -28,6 +28,34 @@ class WatchlistSync {
 
     for (const user of users) {
       await this.syncUserWatchlist(user);
+    }
+
+    // Phase 2: Managed users — obtain a temp token via admin's /switch endpoint
+    const managedUsers = await userRepository
+      .createQueryBuilder('user')
+      .leftJoinAndSelect('user.settings', 'settings')
+      .where('user.isManagedUser = :isManaged', { isManaged: true })
+      .getMany();
+
+    if (managedUsers.length > 0) {
+      const adminUser = await userRepository.findOne({
+        select: { id: true, plexToken: true },
+        where: { id: 1 },
+      });
+
+      if (!adminUser?.plexToken) {
+        logger.warn(
+          'Cannot sync managed user watchlists: admin user has no Plex token',
+          { label: 'Watchlist Sync' }
+        );
+        return;
+      }
+
+      const adminPlexTv = new PlexTvAPI(adminUser.plexToken);
+
+      for (const managedUser of managedUsers) {
+        await this.syncManagedUserWatchlist(managedUser, adminPlexTv);
+      }
     }
   }
 
@@ -57,23 +85,70 @@ class WatchlistSync {
       !user.settings?.watchlistSyncMovies &&
       !user.settings?.watchlistSyncTv
     ) {
-      // Skip sync if user settings have it disabled
       return;
     }
 
     const plexTvApi = new PlexTvAPI(user.plexToken);
-
     const response = await plexTvApi.getWatchlist({ size: 20 });
 
+    await this.processWatchlistItems(user, response.items);
+  }
+
+  private async syncManagedUserWatchlist(user: User, adminPlexTv: PlexTvAPI) {
+    if (!user.plexId) {
+      return;
+    }
+
+    if (
+      !user.hasPermission(
+        [
+          Permission.AUTO_REQUEST,
+          Permission.AUTO_REQUEST_MOVIE,
+          Permission.AUTO_REQUEST_TV,
+        ],
+        { type: 'or' }
+      )
+    ) {
+      return;
+    }
+
+    if (
+      !user.settings?.watchlistSyncMovies &&
+      !user.settings?.watchlistSyncTv
+    ) {
+      return;
+    }
+
+    const tempToken = await adminPlexTv.switchToManagedUser(user.plexId);
+
+    if (!tempToken) {
+      logger.warn(
+        'Failed to obtain token for managed user watchlist sync — Plex Discover may be disabled for this user',
+        {
+          label: 'Watchlist Sync',
+          userId: user.id,
+          displayName: user.displayName,
+        }
+      );
+      return;
+    }
+
+    const managedPlexTv = new PlexTvAPI(tempToken);
+    const response = await managedPlexTv.getWatchlist({ size: 20 });
+
+    await this.processWatchlistItems(user, response.items);
+  }
+
+  private async processWatchlistItems(user: User, items: PlexWatchlistItem[]) {
     const mediaItems = await Media.getRelatedMedia(
       user,
-      response.items.map((i) => ({
+      items.map((i) => ({
         tmdbId: i.tmdbId,
         mediaType: i.type === 'show' ? MediaType.TV : MediaType.MOVIE,
       }))
     );
 
-    const watchlistTmdbIds = response.items.map((i) => i.tmdbId);
+    const watchlistTmdbIds = items.map((i) => i.tmdbId);
 
     const requestRepository = getRepository(MediaRequest);
     const existingAutoRequests = await requestRepository
@@ -90,7 +165,7 @@ class WatchlistSync {
         .map((r) => `${r.media.mediaType}:${r.media.tmdbId}`)
     );
 
-    const unavailableItems = response.items.filter((i) => {
+    const unavailableItems = items.filter((i) => {
       const itemMediaType = i.type === 'show' ? MediaType.TV : MediaType.MOVIE;
 
       return (
@@ -120,7 +195,7 @@ class WatchlistSync {
           throw new Error('Missing TVDB ID from Plex Metadata');
         }
 
-        // Check if they have auto-request permissons and watchlist sync
+        // Check if they have auto-request permissions and watchlist sync
         // enabled for the media type
         if (
           ((!user.hasPermission(

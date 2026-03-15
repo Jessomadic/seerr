@@ -100,6 +100,9 @@ export class User {
   @Column({ type: 'varchar', nullable: true, select: false })
   public plexToken?: string | null;
 
+  @Column({ type: 'boolean', default: false })
+  public isManagedUser: boolean;
+
   @Column({ type: 'integer', default: 0 })
   public permissions = 0;
 
