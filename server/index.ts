@@ -47,6 +47,9 @@ import YAML from 'yamljs';
 const API_SPEC_PATH = path.join(__dirname, '../seerr-api.yml');
 
 logger.info(`Starting Seerr version ${getAppVersion()}`);
+logger.info(`NODE_ENV: ${process.env.NODE_ENV}`);
+logger.info(`COMMIT_TAG env: ${process.env.COMMIT_TAG ?? '(not set)'}`);
+logger.info(`CONFIG_DIRECTORY: ${process.env.CONFIG_DIRECTORY ?? '(not set)'}`);
 const dev = process.env.NODE_ENV !== 'production';
 const app = next({ dev });
 const handle = app.getRequestHandler();
@@ -69,6 +72,7 @@ app
 
     // Run migrations in production
     if (process.env.NODE_ENV === 'production') {
+      logger.info('Running database migrations...');
       if (isPgsql) {
         await dbConnection.runMigrations();
       } else {
@@ -76,6 +80,7 @@ app
         await dbConnection.runMigrations();
         await dbConnection.query('PRAGMA foreign_keys=ON');
       }
+      logger.info('Database migrations complete');
     }
 
     // Load Settings

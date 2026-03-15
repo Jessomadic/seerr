@@ -1,3 +1,4 @@
+import fs from 'fs';
 import path from 'path';
 import * as winston from 'winston';
 import 'winston-daily-rotate-file';
@@ -13,6 +14,21 @@ const hformat = winston.format.printf(
     return msg;
   }
 );
+
+// Ensure the logs directory exists before winston tries to create it.
+// On CIFS/SMB mounts, mkdirSync on an already-existing path can fail with
+// EACCES, so we guard with existsSync first.
+const logsDir = process.env.CONFIG_DIRECTORY
+  ? `${process.env.CONFIG_DIRECTORY}/logs`
+  : path.join(__dirname, '../config/logs');
+
+if (!fs.existsSync(logsDir)) {
+  try {
+    fs.mkdirSync(logsDir, { recursive: true });
+  } catch {
+    // If we can't create it, winston will fall back to console-only logging
+  }
+}
 
 const logger = winston.createLogger({
   level: process.env.LOG_LEVEL?.toLowerCase() || 'debug',
@@ -38,8 +54,7 @@ const logger = winston.createLogger({
       zippedArchive: true,
       maxSize: '20m',
       maxFiles: '7d',
-      createSymlink: true,
-      symlinkName: 'seerr.log',
+      createSymlink: false,
     }),
     new winston.transports.DailyRotateFile({
       filename: process.env.CONFIG_DIRECTORY
@@ -49,8 +64,7 @@ const logger = winston.createLogger({
       zippedArchive: true,
       maxSize: '20m',
       maxFiles: '1d',
-      createSymlink: true,
-      symlinkName: '.machinelogs.json',
+      createSymlink: false,
       format: winston.format.combine(
         winston.format.splat(),
         winston.format.timestamp(),

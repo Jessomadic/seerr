@@ -140,6 +140,10 @@ class WatchlistSync {
   }
 
   private async processWatchlistItems(user: User, items: PlexWatchlistItem[]) {
+    if (items.length === 0) {
+      return;
+    }
+
     const mediaItems = await Media.getRelatedMedia(
       user,
       items.map((i) => ({

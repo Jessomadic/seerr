@@ -15,18 +15,65 @@ const movieRoutes = Router();
 
 movieRoutes.get('/:id', async (req, res, next) => {
   const tmdb = new TheMovieDb();
+  const requestedId = Number(req.params.id);
 
   try {
-    const tmdbMovie = await tmdb.getMovie({
-      movieId: Number(req.params.id),
-      language: (req.query.language as string) ?? req.locale,
-    });
+    let effectiveTmdbId = requestedId;
+    let tmdbMovie;
 
-    const media = await Media.getMedia(tmdbMovie.id, MediaType.MOVIE);
+    try {
+      tmdbMovie = await tmdb.getMovie({
+        movieId: requestedId,
+        language: (req.query.language as string) ?? req.locale,
+      });
+    } catch (primaryErr) {
+      // If TMDB returns 404, the stored ID may be stale (TMDB merged/deleted the entry).
+      // Attempt re-resolution via the IMDb ID stored in our Media record.
+      if ((primaryErr as Error).message?.includes('404')) {
+        const mediaRecord = await Media.getMedia(requestedId, MediaType.MOVIE);
+        if (mediaRecord?.imdbId) {
+          logger.info(
+            'TMDB ID returned 404 — attempting re-resolution via IMDb ID',
+            {
+              label: 'API',
+              staleTmdbId: requestedId,
+              imdbId: mediaRecord.imdbId,
+            }
+          );
+          const extResponse = await tmdb.getByExternalId({
+            externalId: mediaRecord.imdbId,
+            type: 'imdb',
+          });
+          if (extResponse.movie_results?.[0]) {
+            effectiveTmdbId = extResponse.movie_results[0].id;
+            tmdbMovie = await tmdb.getMovie({
+              movieId: effectiveTmdbId,
+              language: (req.query.language as string) ?? req.locale,
+            });
+            // Self-heal: update the stale TMDB ID so future lookups work directly
+            mediaRecord.tmdbId = effectiveTmdbId;
+            await getRepository(Media).save(mediaRecord);
+            logger.info('Self-healed stale TMDB ID in database', {
+              label: 'API',
+              oldTmdbId: requestedId,
+              newTmdbId: effectiveTmdbId,
+            });
+          } else {
+            throw primaryErr;
+          }
+        } else {
+          throw primaryErr;
+        }
+      } else {
+        throw primaryErr;
+      }
+    }
+
+    const media = await Media.getMedia(effectiveTmdbId, MediaType.MOVIE);
 
     const onUserWatchlist = await getRepository(Watchlist).exist({
       where: {
-        tmdbId: Number(req.params.id),
+        tmdbId: requestedId,
         mediaType: MediaType.MOVIE,
         requestedBy: {
           id: req.user?.id,
@@ -38,7 +85,7 @@ movieRoutes.get('/:id', async (req, res, next) => {
 
     // TMDB issue where it doesnt fallback to English when no overview is available in requested locale.
     if (!data.overview) {
-      const tvEnglish = await tmdb.getMovie({ movieId: Number(req.params.id) });
+      const tvEnglish = await tmdb.getMovie({ movieId: effectiveTmdbId });
       data.overview = tvEnglish.overview;
     }
 

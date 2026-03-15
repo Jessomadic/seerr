@@ -41,16 +41,15 @@ ENV COMMIT_TAG=${COMMIT_TAG}
 
 RUN apk add --no-cache tzdata
 
-USER node:node
-
 WORKDIR /app
 
-COPY --chown=node:node . .
-COPY --chown=node:node --from=prod-deps /app/node_modules ./node_modules
-COPY --chown=node:node --from=build /app/.next ./.next
-COPY --chown=node:node --from=build /app/dist ./dist
+COPY . .
+COPY --from=prod-deps /app/node_modules ./node_modules
+COPY --from=build /app/.next ./.next
+COPY --from=build /app/dist ./dist
 
-RUN touch config/DOCKER && \
+RUN mkdir -p config/logs config/db && \
+  touch config/DOCKER && \
   echo "{\"commitTag\": \"${COMMIT_TAG}\"}" > committag.json
 
 EXPOSE 5055

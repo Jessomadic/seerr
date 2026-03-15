@@ -144,14 +144,6 @@ export interface PlexHomeUser {
   restricted: boolean;
 }
 
-interface HomeUsersResponse {
-  users: PlexHomeUser[];
-}
-
-interface SwitchUserResponse {
-  authenticationToken: string;
-}
-
 class PlexTvAPI extends ExternalAPI {
   private authToken: string;
 
@@ -401,10 +393,31 @@ class PlexTvAPI extends ExternalAPI {
 
   public async getHomeUsers(): Promise<PlexHomeUser[]> {
     try {
-      const response = await this.axios.get<HomeUsersResponse>(
-        '/api/home/users'
-      );
-      return response.data.users ?? [];
+      // Plex.tv /api endpoints return XML, so we must request raw text and parse manually
+      const response = await this.axios.get('/api/home/users', {
+        transformResponse: [],
+        responseType: 'text',
+      });
+
+      logger.debug('Plex home users raw response', {
+        label: 'Plex.tv API',
+        preview: String(response.data).slice(0, 300),
+      });
+
+      const parsed = await xml2js.parseStringPromise(response.data as string);
+      const users: { $: Record<string, string> }[] =
+        parsed?.MediaContainer?.User ?? [];
+
+      return users.map((u) => ({
+        id: parseInt(u.$.id),
+        uuid: u.$.uuid ?? '',
+        title: u.$.title ?? '',
+        username: u.$.username ?? '',
+        email: u.$.email ?? '',
+        thumb: u.$.thumb ?? '',
+        home: u.$.home === '1',
+        restricted: u.$.restricted === '1',
+      }));
     } catch (e) {
       logger.error('Failed to retrieve home users from Plex', {
         label: 'Plex.tv API',
@@ -418,10 +431,72 @@ class PlexTvAPI extends ExternalAPI {
     managedUserId: number
   ): Promise<string | null> {
     try {
-      const response = await this.axios.post<SwitchUserResponse>(
-        `/api/home/users/${managedUserId}/switch`
+      // Plex /api/ endpoints return XML; request raw text and parse manually
+      const response = await this.axios.post(
+        `/api/home/users/${managedUserId}/switch`,
+        {},
+        {
+          transformResponse: [],
+          responseType: 'text',
+        }
       );
-      return response.data.authenticationToken ?? null;
+
+      const rawData = String(response.data);
+      logger.debug('switchToManagedUser raw response', {
+        label: 'Plex.tv API',
+        managedUserId,
+        preview: rawData.slice(0, 400),
+      });
+
+      // Try XML parsing first (standard for Plex /api/ endpoints).
+      // The response is typically: <user authToken="..." id="..." .../>
+      try {
+        const parsed = await xml2js.parseStringPromise(rawData);
+        // The root element is usually "user"; the token is in $.authToken
+        const rootEl = parsed?.user ?? parsed?.User;
+        const token =
+          rootEl?.$?.authToken ??
+          rootEl?.$?.authenticationToken ??
+          rootEl?.$?.access_token ??
+          null;
+        if (token) {
+          logger.debug('Extracted managed user token via XML', {
+            label: 'Plex.tv API',
+            managedUserId,
+          });
+          return token;
+        }
+      } catch {
+        // Not valid XML — fall through to JSON
+      }
+
+      // Try JSON as a fallback (some environments may return JSON)
+      try {
+        const jsonData = JSON.parse(rawData) as Record<string, unknown>;
+        const token =
+          (jsonData.authToken as string) ??
+          (jsonData.authenticationToken as string) ??
+          null;
+        if (token) {
+          logger.debug('Extracted managed user token via JSON', {
+            label: 'Plex.tv API',
+            managedUserId,
+          });
+          return token;
+        }
+      } catch {
+        // Not valid JSON either
+      }
+
+      logger.error(
+        'switchToManagedUser: could not extract auth token from Plex response',
+        {
+          label: 'Plex.tv API',
+          managedUserId,
+          preview: rawData.slice(0, 400),
+        }
+      );
+      return null;
     } catch (e) {
       logger.error('Failed to switch to managed Plex user', {
         label: 'Plex.tv API',
