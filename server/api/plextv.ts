@@ -428,83 +428,39 @@ class PlexTvAPI extends ExternalAPI {
   }
 
   public async switchToManagedUser(
-    managedUserId: number
+    managedUserUuid: string
   ): Promise<string | null> {
     try {
-      // Plex /api/ endpoints return XML.
-      // Send NO body and override Content-Type — sending Content-Type:
-      // application/json with an empty body causes a 422 on this endpoint.
-      // The response is XML: <user authenticationToken="..." id="..." .../>
-      const response = await this.axios.post(
-        `/api/home/users/${managedUserId}/switch`,
+      // Use the v2 endpoint with UUID (not numeric id) — confirmed by multiple
+      // TypeScript implementations. v1 /api/ endpoint returns 422 without the
+      // full set of X-Plex-* client headers; v2 only requires Client-Identifier.
+      const settings = getSettings();
+      const response = await this.axios.post<{ authToken?: string }>(
+        `/api/v2/home/users/${managedUserUuid}/switch`,
         undefined,
         {
-          transformResponse: [],
-          responseType: 'text',
           headers: {
+            'X-Plex-Client-Identifier': settings.clientId,
+            'X-Plex-Product': 'Seerr',
             'Content-Type': 'application/x-www-form-urlencoded',
+            Accept: 'application/json',
           },
         }
       );
 
-      const rawData = String(response.data);
-      logger.debug('switchToManagedUser raw response', {
+      const token = response.data?.authToken ?? null;
+
+      logger.debug('switchToManagedUser result', {
         label: 'Plex.tv API',
-        managedUserId,
-        preview: rawData.slice(0, 400),
+        managedUserUuid,
+        gotToken: !!token,
       });
 
-      // Parse XML: token is in root element attribute "authenticationToken"
-      try {
-        const parsed = await xml2js.parseStringPromise(rawData);
-        const rootEl = parsed?.user ?? parsed?.User;
-        // plexapi confirms the attribute name is "authenticationToken"
-        const token =
-          rootEl?.$?.authenticationToken ??
-          rootEl?.$?.authToken ??
-          null;
-        if (token) {
-          logger.debug('Extracted managed user token via XML', {
-            label: 'Plex.tv API',
-            managedUserId,
-          });
-          return token;
-        }
-      } catch {
-        // Not valid XML — fall through to JSON
-      }
-
-      // JSON fallback (in case Plex ever returns JSON for this endpoint)
-      try {
-        const jsonData = JSON.parse(rawData) as Record<string, unknown>;
-        const token =
-          (jsonData.authenticationToken as string) ??
-          (jsonData.authToken as string) ??
-          null;
-        if (token) {
-          logger.debug('Extracted managed user token via JSON', {
-            label: 'Plex.tv API',
-            managedUserId,
-          });
-          return token;
-        }
-      } catch {
-        // Not valid JSON either
-      }
-
-      logger.error(
-        'switchToManagedUser: could not extract auth token from Plex response',
-        {
-          label: 'Plex.tv API',
-          managedUserId,
-          preview: rawData.slice(0, 400),
-        }
-      );
-      return null;
+      return token;
     } catch (e) {
       logger.error('Failed to switch to managed Plex user', {
         label: 'Plex.tv API',
-        managedUserId,
+        managedUserUuid,
         errorMessage: e.message,
       });
       return null;

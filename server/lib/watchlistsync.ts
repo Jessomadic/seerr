@@ -53,8 +53,26 @@ class WatchlistSync {
 
       const adminPlexTv = new PlexTvAPI(adminUser.plexToken);
 
+      // Fetch home users to build a plexId → uuid map.
+      // The v2 switch endpoint requires the UUID, not the numeric plexId.
+      const homeUsers = await adminPlexTv.getHomeUsers();
+      const uuidByPlexId = new Map(homeUsers.map((u) => [u.id, u.uuid]));
+
       for (const managedUser of managedUsers) {
-        await this.syncManagedUserWatchlist(managedUser, adminPlexTv);
+        const uuid = uuidByPlexId.get(managedUser.plexId!);
+        if (!uuid) {
+          logger.warn(
+            'Could not find Plex UUID for managed user — skipping watchlist sync',
+            {
+              label: 'Watchlist Sync',
+              userId: managedUser.id,
+              displayName: managedUser.displayName,
+              plexId: managedUser.plexId,
+            }
+          );
+          continue;
+        }
+        await this.syncManagedUserWatchlist(managedUser, adminPlexTv, uuid);
       }
     }
   }
@@ -94,7 +112,11 @@ class WatchlistSync {
     await this.processWatchlistItems(user, response.items);
   }
 
-  private async syncManagedUserWatchlist(user: User, adminPlexTv: PlexTvAPI) {
+  private async syncManagedUserWatchlist(
+    user: User,
+    adminPlexTv: PlexTvAPI,
+    managedUserUuid: string
+  ) {
     const logCtx = {
       label: 'Watchlist Sync',
       userId: user.id,
@@ -137,7 +159,7 @@ class WatchlistSync {
 
     logger.debug('Attempting managed user watchlist sync', logCtx);
 
-    const tempToken = await adminPlexTv.switchToManagedUser(user.plexId);
+    const tempToken = await adminPlexTv.switchToManagedUser(managedUserUuid);
 
     if (!tempToken) {
       logger.warn(
