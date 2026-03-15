@@ -431,13 +431,19 @@ class PlexTvAPI extends ExternalAPI {
     managedUserId: number
   ): Promise<string | null> {
     try {
-      // Plex /api/ endpoints return XML; request raw text and parse manually
+      // Plex /api/ endpoints return XML.
+      // Send NO body and override Content-Type — sending Content-Type:
+      // application/json with an empty body causes a 422 on this endpoint.
+      // The response is XML: <user authenticationToken="..." id="..." .../>
       const response = await this.axios.post(
         `/api/home/users/${managedUserId}/switch`,
-        {},
+        undefined,
         {
           transformResponse: [],
           responseType: 'text',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
         }
       );
 
@@ -448,16 +454,14 @@ class PlexTvAPI extends ExternalAPI {
         preview: rawData.slice(0, 400),
       });
 
-      // Try XML parsing first (standard for Plex /api/ endpoints).
-      // The response is typically: <user authToken="..." id="..." .../>
+      // Parse XML: token is in root element attribute "authenticationToken"
       try {
         const parsed = await xml2js.parseStringPromise(rawData);
-        // The root element is usually "user"; the token is in $.authToken
         const rootEl = parsed?.user ?? parsed?.User;
+        // plexapi confirms the attribute name is "authenticationToken"
         const token =
-          rootEl?.$?.authToken ??
           rootEl?.$?.authenticationToken ??
-          rootEl?.$?.access_token ??
+          rootEl?.$?.authToken ??
           null;
         if (token) {
           logger.debug('Extracted managed user token via XML', {
@@ -470,12 +474,12 @@ class PlexTvAPI extends ExternalAPI {
         // Not valid XML — fall through to JSON
       }
 
-      // Try JSON as a fallback (some environments may return JSON)
+      // JSON fallback (in case Plex ever returns JSON for this endpoint)
       try {
         const jsonData = JSON.parse(rawData) as Record<string, unknown>;
         const token =
-          (jsonData.authToken as string) ??
           (jsonData.authenticationToken as string) ??
+          (jsonData.authToken as string) ??
           null;
         if (token) {
           logger.debug('Extracted managed user token via JSON', {
