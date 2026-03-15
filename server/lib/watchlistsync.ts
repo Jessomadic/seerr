@@ -95,7 +95,15 @@ class WatchlistSync {
   }
 
   private async syncManagedUserWatchlist(user: User, adminPlexTv: PlexTvAPI) {
+    const logCtx = {
+      label: 'Watchlist Sync',
+      userId: user.id,
+      displayName: user.displayName,
+      plexId: user.plexId,
+    };
+
     if (!user.plexId) {
+      logger.debug('Skipping managed user: no plexId stored', logCtx);
       return;
     }
 
@@ -109,6 +117,10 @@ class WatchlistSync {
         { type: 'or' }
       )
     ) {
+      logger.debug(
+        'Skipping managed user: missing AUTO_REQUEST permission — grant it in Settings → Users',
+        logCtx
+      );
       return;
     }
 
@@ -116,25 +128,35 @@ class WatchlistSync {
       !user.settings?.watchlistSyncMovies &&
       !user.settings?.watchlistSyncTv
     ) {
+      logger.debug(
+        'Skipping managed user: watchlist sync not enabled — turn on "Auto-Request Movies" or "Auto-Request Series" in the user profile settings',
+        logCtx
+      );
       return;
     }
+
+    logger.debug('Attempting managed user watchlist sync', logCtx);
 
     const tempToken = await adminPlexTv.switchToManagedUser(user.plexId);
 
     if (!tempToken) {
       logger.warn(
-        'Failed to obtain token for managed user watchlist sync — Plex Discover may be disabled for this user',
-        {
-          label: 'Watchlist Sync',
-          userId: user.id,
-          displayName: user.displayName,
-        }
+        'Failed to obtain temp token for managed user — check the debug log above for the raw Plex response',
+        logCtx
       );
       return;
     }
 
+    logger.debug('Got temp token for managed user, fetching watchlist', logCtx);
+
     const managedPlexTv = new PlexTvAPI(tempToken);
     const response = await managedPlexTv.getWatchlist({ size: 20 });
+
+    logger.debug('Managed user watchlist fetched', {
+      ...logCtx,
+      itemCount: response.items.length,
+      totalSize: response.totalSize,
+    });
 
     await this.processWatchlistItems(user, response.items);
   }
