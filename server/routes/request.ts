@@ -485,6 +485,13 @@ requestRoutes.put<{ requestId: string }>(
         });
       }
 
+      if (request.status !== MediaRequestStatus.PENDING) {
+        return next({
+          status: 409,
+          message: 'Only pending requests can be modified.',
+        });
+      }
+
       let requestUser = request.requestedBy;
 
       if (
@@ -512,7 +519,7 @@ requestRoutes.put<{ requestId: string }>(
         request.tags = req.body.tags;
         request.requestedBy = requestUser as User;
 
-        requestRepository.save(request);
+        await requestRepository.save(request);
       } else if (req.body.mediaType === MediaType.TV) {
         const mediaRepository = getRepository(Media);
         request.serverId = req.body.serverId;
@@ -564,7 +571,7 @@ requestRoutes.put<{ requestId: string }>(
           });
         }
 
-        const newSeasons = requestedSeasons.filter(
+        const newSeasons = filteredSeasons.filter(
           (sn) => !request.seasons.map((s) => s.seasonNumber).includes(sn)
         );
 
@@ -609,8 +616,8 @@ requestRoutes.delete('/:requestId', async (req, res, next) => {
 
     if (
       !req.user?.hasPermission(Permission.MANAGE_REQUESTS) &&
-      request.requestedBy.id !== req.user?.id &&
-      request.status !== 1
+      (request.requestedBy.id !== req.user?.id ||
+        request.status !== MediaRequestStatus.PENDING)
     ) {
       return next({
         status: 401,
@@ -644,8 +651,16 @@ requestRoutes.post<{
         relations: { requestedBy: true, modifiedBy: true },
       });
 
+      if (request.status !== MediaRequestStatus.FAILED) {
+        return next({
+          status: 409,
+          message: 'Only failed requests can be retried.',
+        });
+      }
+
       // this also triggers updating the parent media's status & sending to *arr
       request.status = MediaRequestStatus.APPROVED;
+      request.modifiedBy = req.user;
       await requestRepository.save(request);
 
       return res.status(200).json(request);
@@ -661,7 +676,7 @@ requestRoutes.post<{
 
 requestRoutes.post<{
   requestId: string;
-  status: 'pending' | 'approve' | 'decline';
+  status: 'approve' | 'decline';
 }>(
   '/:requestId/:status',
   isAuthenticated(Permission.MANAGE_REQUESTS),
@@ -677,15 +692,24 @@ requestRoutes.post<{
       let newStatus: MediaRequestStatus;
 
       switch (req.params.status) {
-        case 'pending':
-          newStatus = MediaRequestStatus.PENDING;
-          break;
         case 'approve':
           newStatus = MediaRequestStatus.APPROVED;
           break;
         case 'decline':
           newStatus = MediaRequestStatus.DECLINED;
           break;
+        default:
+          return next({
+            status: 400,
+            message: 'Status must be approve or decline.',
+          });
+      }
+
+      if (request.status !== MediaRequestStatus.PENDING) {
+        return next({
+          status: 409,
+          message: 'Only pending requests can be approved or declined.',
+        });
       }
 
       request.status = newStatus;

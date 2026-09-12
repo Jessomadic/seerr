@@ -10,6 +10,7 @@ import { ANIME_KEYWORD_ID } from '@server/api/themoviedb/constants';
 import type {
   TmdbKeyword,
   TmdbTvDetails,
+  TmdbTvScanDetails,
 } from '@server/api/themoviedb/interfaces';
 import { MediaServerType } from '@server/constants/server';
 import { getRepository } from '@server/datasource';
@@ -60,7 +61,9 @@ class JellyfinScanner
     }
 
     const anidbId = Number(metadata.ProviderIds.AniDB ?? null);
-    let tmdbId = Number(metadata.ProviderIds.Tmdb ?? null);
+    let tmdbId = Number(
+      metadata.ProviderIds.Tmdb || metadata.ProviderIds.TheMovieDb || null
+    );
     let imdbId = metadata.ProviderIds.Imdb;
 
     // We use anidb only if we have the anidbId and nothing else
@@ -71,10 +74,9 @@ class JellyfinScanner
     }
 
     if (imdbId && !tmdbId) {
-      const tmdbMovie = await this.tmdb.getMediaByImdbId({
+      tmdbId = await this.tmdb.resolveImdbIdForScan({
         imdbId: imdbId,
       });
-      tmdbId = tmdbMovie.id;
     }
 
     if (!tmdbId) {
@@ -182,15 +184,15 @@ class JellyfinScanner
   }: {
     tmdbId?: number;
     tvdbId?: number;
-  }): Promise<TmdbTvDetails> {
+  }): Promise<TmdbTvScanDetails | TmdbTvDetails> {
     let tvShow;
 
     if (tmdbId) {
-      tvShow = await this.tmdb.getTvShow({
+      tvShow = await this.tmdb.getTvShowForScan({
         tvId: Number(tmdbId),
       });
     } else if (tvdbId) {
-      tvShow = await this.tmdb.getShowByTvdbId({
+      tvShow = await this.tmdb.getShowByTvdbIdForScan({
         tvdbId: Number(tvdbId),
       });
     } else {
@@ -213,7 +215,7 @@ class JellyfinScanner
   }
 
   private async processJellyfinShow(jellyfinitem: JellyfinLibraryItem) {
-    let tvShow: TmdbTvDetails | null = null;
+    let tvShow: TmdbTvScanDetails | TmdbTvDetails | null = null;
 
     try {
       const Id =
@@ -227,10 +229,12 @@ class JellyfinScanner
         return;
       }
 
-      if (metadata.ProviderIds.Tmdb) {
+      if (metadata.ProviderIds.Tmdb || metadata.ProviderIds.TheMovieDb) {
         try {
           tvShow = await this.getTvShow({
-            tmdbId: Number(metadata.ProviderIds.Tmdb),
+            tmdbId: Number(
+              metadata.ProviderIds.Tmdb || metadata.ProviderIds.TheMovieDb
+            ),
           });
         } catch {
           this.log('Unable to find TMDb ID for this title.', 'debug', {
@@ -258,7 +262,7 @@ class JellyfinScanner
         tvdbSeasonFromAnidb = result?.tvdbSeason;
         if (result?.tvdbId) {
           try {
-            tvShow = await this.tmdb.getShowByTvdbId({
+            tvShow = await this.tmdb.getShowByTvdbIdForScan({
               tvdbId: result.tvdbId,
             });
           } catch {

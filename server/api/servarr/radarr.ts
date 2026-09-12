@@ -1,4 +1,5 @@
 import logger from '@server/logger';
+import type { AxiosResponse } from 'axios';
 import ServarrBase from './base';
 
 export interface RadarrMovieOptions {
@@ -74,7 +75,9 @@ class RadarrAPI extends ServarrBase<{ movieId: number }> {
 
       return response.data;
     } catch (e) {
-      throw new Error(`[Radarr] Failed to retrieve movies: ${e.message}`);
+      throw new Error(`[Radarr] Failed to retrieve movies: ${e.message}`, {
+        cause: e,
+      });
     }
   };
 
@@ -84,31 +87,34 @@ class RadarrAPI extends ServarrBase<{ movieId: number }> {
 
       return response.data;
     } catch (e) {
-      throw new Error(`[Radarr] Failed to retrieve movie: ${e.message}`);
+      throw new Error(`[Radarr] Failed to retrieve movie: ${e.message}`, {
+        cause: e,
+      });
     }
   };
 
   public async getMovieByTmdbId(id: number): Promise<RadarrMovie> {
+    let response: AxiosResponse<RadarrMovie[]>;
     try {
-      const response = await this.axios.get<RadarrMovie[]>('/movie/lookup', {
+      response = await this.axios.get<RadarrMovie[]>('/movie/lookup', {
         params: {
           term: `tmdb:${id}`,
         },
       });
-
-      if (!response.data[0]) {
-        throw new Error('Movie not found');
-      }
-
-      return response.data[0];
     } catch (e) {
       logger.error('Error retrieving movie by TMDB ID', {
         label: 'Radarr API',
         errorMessage: e.message,
         tmdbId: id,
       });
+      throw e;
+    }
+
+    if (!response.data[0]) {
       throw new Error('Movie not found');
     }
+
+    return response.data[0];
   }
 
   public addMovie = async (
@@ -240,7 +246,7 @@ class RadarrAPI extends ServarrBase<{ movieId: number }> {
           response: e?.response?.data,
         }
       );
-      throw new Error('Failed to add movie to Radarr');
+      throw new Error('Failed to add movie to Radarr', { cause: e });
     }
   };
 
@@ -263,9 +269,17 @@ class RadarrAPI extends ServarrBase<{ movieId: number }> {
       );
     }
   }
-  public removeMovie = async (movieId: number): Promise<void> => {
+  public removeMovie = async (tmdbId: number): Promise<void> => {
+    const { id, title } = await this.getMovieByTmdbId(tmdbId);
+
+    if (!id) {
+      logger.info(`[Radarr] Movie not in library, nothing to remove`, {
+        tmdbId,
+      });
+      return;
+    }
+
     try {
-      const { id, title } = await this.getMovieByTmdbId(movieId);
       await this.axios.delete(`/movie/${id}`, {
         params: {
           deleteFiles: true,
@@ -274,7 +288,13 @@ class RadarrAPI extends ServarrBase<{ movieId: number }> {
       });
       logger.info(`[Radarr] Removed movie ${title}`);
     } catch (e) {
-      throw new Error(`[Radarr] Failed to remove movie: ${e.message}`);
+      if (e?.response?.status === 404) {
+        logger.info(`[Radarr] Movie already removed from Radarr`, {
+          tmdbId,
+        });
+        return;
+      }
+      throw e;
     }
   };
 

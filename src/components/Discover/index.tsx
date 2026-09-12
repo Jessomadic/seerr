@@ -3,18 +3,19 @@ import ConfirmButton from '@app/components/Common/ConfirmButton';
 import LoadingSpinner from '@app/components/Common/LoadingSpinner';
 import PageTitle from '@app/components/Common/PageTitle';
 import Tooltip from '@app/components/Common/Tooltip';
-import { sliderTitles } from '@app/components/Discover/constants';
 import CreateSlider from '@app/components/Discover/CreateSlider';
 import DiscoverSliderEdit from '@app/components/Discover/DiscoverSliderEdit';
 import MovieGenreSlider from '@app/components/Discover/MovieGenreSlider';
 import NetworkSlider from '@app/components/Discover/NetworkSlider';
 import PlexWatchlistSlider from '@app/components/Discover/PlexWatchlistSlider';
-import RecentlyAddedSlider from '@app/components/Discover/RecentlyAddedSlider';
 import RecentRequestsSlider from '@app/components/Discover/RecentRequestsSlider';
+import RecentlyAddedSlider from '@app/components/Discover/RecentlyAddedSlider';
 import StudioSlider from '@app/components/Discover/StudioSlider';
 import TvGenreSlider from '@app/components/Discover/TvGenreSlider';
+import { sliderTitles } from '@app/components/Discover/constants';
 import MediaSlider from '@app/components/MediaSlider';
 import { encodeURIExtraParams } from '@app/hooks/useDiscover';
+import useToasts from '@app/hooks/useToasts';
 import { Permission, useUser } from '@app/hooks/useUser';
 import globalMessages from '@app/i18n/globalMessages';
 import defineMessages from '@app/utils/defineMessages';
@@ -31,7 +32,6 @@ import type DiscoverSlider from '@server/entity/DiscoverSlider';
 import axios from 'axios';
 import { useEffect, useState } from 'react';
 import { useIntl } from 'react-intl';
-import { useToasts } from 'react-toast-notifications';
 import useSWR from 'swr';
 
 const messages = defineMessages('components.Discover', {
@@ -84,7 +84,7 @@ const Discover = () => {
       });
       setIsEditing(false);
       mutate();
-    } catch (e) {
+    } catch {
       addToast(intl.formatMessage(messages.updatefailed), {
         appearance: 'error',
         autoDismiss: true,
@@ -102,7 +102,7 @@ const Discover = () => {
       });
       setIsEditing(false);
       mutate();
-    } catch (e) {
+    } catch {
       addToast(intl.formatMessage(messages.resetfailed), {
         appearance: 'error',
         autoDismiss: true,
@@ -147,6 +147,7 @@ const Discover = () => {
             </div>
           )}
           <Transition
+            as="div"
             show={!isEditing}
             enter="transition-opacity duration-300"
             enterFrom="opacity-0"
@@ -165,6 +166,7 @@ const Discover = () => {
             </button>
           </Transition>
           <Transition
+            as="div"
             show={isEditing}
             enter="transition duration-300"
             enterFrom="opacity-0 translate-y-6"
@@ -424,19 +426,21 @@ const Discover = () => {
                 const tempSliders = sliders.slice();
 
                 tempSliders.splice(originalPosition, 1);
-                hasClickedArrows
-                  ? tempSliders.splice(
-                      position === 'Above' ? index - 1 : index + 1,
-                      0,
-                      originalItem
-                    )
-                  : tempSliders.splice(
-                      position === 'Above' && index > originalPosition
-                        ? Math.max(index - 1, 0)
-                        : index,
-                      0,
-                      originalItem
-                    );
+                if (hasClickedArrows) {
+                  tempSliders.splice(
+                    position === 'Above' ? index - 1 : index + 1,
+                    0,
+                    originalItem
+                  );
+                } else {
+                  tempSliders.splice(
+                    position === 'Above' && index > originalPosition
+                      ? Math.max(index - 1, 0)
+                      : index,
+                    0,
+                    originalItem
+                  );
+                }
 
                 setSliders(tempSliders);
               }}

@@ -76,17 +76,24 @@ class WatchlistSync {
     const watchlistTmdbIds = response.items.map((i) => i.tmdbId);
 
     const requestRepository = getRepository(MediaRequest);
-    const existingAutoRequests = await requestRepository
-      .createQueryBuilder('request')
-      .leftJoinAndSelect('request.media', 'media')
-      .where('request.requestedBy = :userId', { userId: user.id })
-      .andWhere('request.isAutoRequest = true')
-      .andWhere('media.tmdbId IN (:...tmdbIds)', { tmdbIds: watchlistTmdbIds })
-      .getMany();
+    const existingAutoRequests: MediaRequest[] =
+      watchlistTmdbIds.length > 0
+        ? await requestRepository
+            .createQueryBuilder('request')
+            .leftJoinAndSelect('request.media', 'media')
+            .where('request.requestedBy = :userId', { userId: user.id })
+            .andWhere('request.isAutoRequest = true')
+            .andWhere('media.tmdbId IN (:...tmdbIds)', {
+              tmdbIds: watchlistTmdbIds,
+            })
+            .getMany()
+        : [];
 
     const autoRequestedTmdbIds = new Set(
       existingAutoRequests
-        .filter((r) => r.media != null)
+        .filter(
+          (r) => r.media != null && r.media.status !== MediaStatus.DELETED
+        )
         .map((r) => `${r.media.mediaType}:${r.media.tmdbId}`)
     );
 
@@ -101,7 +108,8 @@ class WatchlistSync {
             m.mediaType === itemMediaType &&
             (m.status === MediaStatus.BLOCKLISTED ||
               (itemMediaType === MediaType.MOVIE &&
-                m.status !== MediaStatus.UNKNOWN) ||
+                m.status !== MediaStatus.UNKNOWN &&
+                m.status !== MediaStatus.DELETED) ||
               (itemMediaType === MediaType.TV &&
                 m.status === MediaStatus.AVAILABLE))
         )
@@ -110,12 +118,6 @@ class WatchlistSync {
 
     for (const mediaItem of unavailableItems) {
       try {
-        logger.info("Creating media request from user's Plex Watchlist", {
-          label: 'Watchlist Sync',
-          userId: user.id,
-          mediaTitle: mediaItem.title,
-        });
-
         if (mediaItem.type === 'show' && !mediaItem.tvdbId) {
           throw new Error('Missing TVDB ID from Plex Metadata');
         }
@@ -151,6 +153,12 @@ class WatchlistSync {
           user,
           { isAutoRequest: true }
         );
+
+        logger.info("Created media request from user's Plex Watchlist", {
+          label: 'Watchlist Sync',
+          userId: user.id,
+          mediaTitle: mediaItem.title,
+        });
       } catch (e) {
         if (!(e instanceof Error)) {
           continue;
